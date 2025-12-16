@@ -1,406 +1,344 @@
-// Offline-First PWA Note Taking App
-// Advanced Caching and Service Worker Implementation
+const DB_NAME = 'NotePadDB';
+const DB_VERSION = 2; // NEW VERSION
+const NOTE_STORE = 'notes';
 
-class NoteApp {
-    constructor() {
-        this.db = null;
-        this.notes = [];
-        this.currentNoteId = null;
-        this.isOnline = navigator.onLine;
-        this.syncQueue = [];
-        
-        this.init();
-    }
+let db;
+let currentNoteId = null;
 
-    async init() {
-        await this.initIndexedDB();
-        this.loadNotes();
-        this.setupEventListeners();
-        this.setupNetworkListeners();
-        this.updateNetworkStatus();
-        this.updateStorageInfo();
-        
-        // Auto-sync when online
-        setInterval(() => this.autoSync(), 30000);
-    }
+// Get all necessary elements
+const notesList = document.getElementById('notesList');
+const noteSearch = document.getElementById('noteSearch');
+const newNoteBtn = document.getElementById('newNoteBtn');
+const saveBtn = document.getElementById('saveBtn'); 
+const deleteBtn = document.getElementById('deleteBtn');
+const noteTitleInput = document.getElementById('noteTitle');
+const noteContentInput = document.getElementById('noteContent');
+const editorForm = document.getElementById('editorForm'); 
+const editorContent = document.getElementById('editorContent');
+const syncStatus = document.getElementById('syncStatus');
+const installBtn = document.getElementById('installBtn');
+const charCountSpan = document.getElementById('charCount');
+const lastSavedSpan = document.getElementById('lastSaved');
+const syncBtn = document.getElementById('syncBtn');
 
-    // ============== IndexedDB Management ==============
-    initIndexedDB() {
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open('NotePadDB', 1);
+// --- IndexedDB Setup ---
 
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                this.db = request.result;
-                resolve();
-            };
+function openDatabase() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                
-                // Notes object store
-                if (!db.objectStoreNames.contains('notes')) {
-                    const noteStore = db.createObjectStore('notes', { keyPath: 'id' });
-                    noteStore.createIndex('title', 'title', { unique: false });
-                    noteStore.createIndex('timestamp', 'timestamp', { unique: false });
-                    noteStore.createIndex('synced', 'synced', { unique: false });
-                }
-
-                // Sync queue store
-                if (!db.objectStoreNames.contains('syncQueue')) {
-                    db.createObjectStore('syncQueue', { keyPath: 'id', autoIncrement: true });
-                }
-            };
-        });
-    }
-
-    // ============== CRUD Operations ==============
-    async loadNotes() {
-        return new Promise((resolve) => {
-            const transaction = this.db.transaction(['notes'], 'readonly');
-            const store = transaction.objectStore('notes');
-            const request = store.getAll();
-
-            request.onsuccess = () => {
-                this.notes = request.result.sort((a, b) => b.timestamp - a.timestamp);
-                this.renderNotesList();
-                this.updateCachedCount();
-                resolve();
-            };
-        });
-    }
-
-    async saveNote(title, content) {
-        const note = {
-            id: this.currentNoteId || this.generateId(),
-            title: title || 'Untitled',
-            content: content,
-            timestamp: Date.now(),
-            synced: false,
-            lastModified: Date.now()
+        request.onerror = (event) => {
+            console.error("IndexedDB error:", event.target.errorCode);
+            reject(event.target.errorCode);
         };
 
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['notes'], 'readwrite');
-            const store = transaction.objectStore('notes');
-            const request = store.put(note);
+        request.onsuccess = (event) => {
+            db = event.target.result;
+            resolve(db);
+        };
 
-            request.onsuccess = () => {
-                this.currentNoteId = note.id;
-                
-                // Add to sync queue if online
-                if (this.isOnline) {
-                    this.queueSync(note);
-                }
-                
-                this.loadNotes().then(() => {
-                    this.renderNotesList();
-                    this.showNotification('Note saved successfully!', 'success');
-                    resolve(note);
-                });
-            };
-
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    async deleteNote(noteId) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['notes'], 'readwrite');
-            const store = transaction.objectStore('notes');
-            const request = store.delete(noteId);
-
-            request.onsuccess = () => {
-                if (this.currentNoteId === noteId) {
-                    this.currentNoteId = null;
-                    this.showEditor(false);
-                }
-                
-                this.loadNotes().then(() => {
-                    this.renderNotesList();
-                    this.showNotification('Note deleted', 'success');
-                    resolve();
-                });
-            };
-
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    // ============== Sync Management ==============
-    async queueSync(note) {
-        return new Promise((resolve) => {
-            const transaction = this.db.transaction(['syncQueue'], 'readwrite');
-            const store = transaction.objectStore('syncQueue');
-            const request = store.add({
-                action: 'save',
-                note: note,
-                timestamp: Date.now()
-            });
-
-            request.onsuccess = resolve;
-        });
-    }
-
-    async autoSync() {
-        if (!this.isOnline) return;
-        
-        const transaction = this.db.transaction(['syncQueue'], 'readonly');
-        const store = transaction.objectStore('syncQueue');
-        const request = store.getAll();
-
-        request.onsuccess = () => {
-            const queue = request.result;
-            if (queue.length > 0) {
-                this.syncWithServer(queue);
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            // The object store configuration remains the same, but the version is higher.
+            if (!db.objectStoreNames.contains(NOTE_STORE)) {
+                const store = db.createObjectStore(NOTE_STORE, { keyPath: 'id', autoIncrement: true });
+                store.createIndex('synced_status', 'synced', { unique: false });
             }
         };
-    }
+    });
+}
 
-    async syncWithServer(queue) {
-        try {
-            for (const item of queue) {
-                const response = await fetch('http://localhost:3000/api/notes', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(item.note)
-                });
+// --- Data Synchronization Logic ---
 
-                if (response.ok) {
-                    // Mark as synced
-                    const transaction = this.db.transaction(['notes'], 'readwrite');
-                    const store = transaction.objectStore('notes');
-                    const note = item.note;
-                    note.synced = true;
-                    store.put(note);
-
-                    // Remove from sync queue
-                    const queueTransaction = this.db.transaction(['syncQueue'], 'readwrite');
-                    const queueStore = queueTransaction.objectStore('syncQueue');
-                    queueStore.delete(item.id);
-                }
-            }
-            this.loadNotes();
-            this.showNotification('Synced with server', 'success');
-        } catch (error) {
-            console.error('Sync error:', error);
-            this.showNotification('Failed to sync with server', 'warning');
-        }
-    }
-
-    // ============== UI Event Handlers ==============
-    setupEventListeners() {
-        // New note
-        document.getElementById('newNoteBtn').addEventListener('click', () => this.newNote());
-
-        // Save note
-        document.getElementById('saveBtn').addEventListener('click', () => this.handleSaveNote());
-
-        // Delete note
-        document.getElementById('deleteBtn').addEventListener('click', () => this.handleDeleteNote());
-
-        // Cancel editing
-        document.getElementById('cancelBtn').addEventListener('click', () => this.showEditor(false));
-
-        // Sync button
-        document.getElementById('syncBtn').addEventListener('click', () => this.handleManualSync());
-
-        // Install button
-        if (document.getElementById('installBtn')) {
-            document.getElementById('installBtn').addEventListener('click', () => this.installApp());
-        }
-
-        // Character count
-        document.getElementById('noteContent').addEventListener('input', (e) => {
-            document.getElementById('charCount').textContent = `${e.target.value.length} characters`;
-            this.updateLastSaved();
-        });
-
-        // PWA install event
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            this.deferredPrompt = e;
-            document.getElementById('installBtn').style.display = 'flex';
-        });
-    }
-
-    setupNetworkListeners() {
-        window.addEventListener('online', () => {
-            this.isOnline = true;
-            this.updateNetworkStatus();
-            this.showNotification('Back online!', 'success');
-            this.autoSync();
-        });
-
-        window.addEventListener('offline', () => {
-            this.isOnline = false;
-            this.updateNetworkStatus();
-            this.showNotification('You are offline - changes will sync when online', 'warning');
-        });
-    }
-
-    newNote() {
-        this.currentNoteId = null;
-        document.getElementById('noteTitle').value = '';
-        document.getElementById('noteContent').value = '';
-        document.getElementById('charCount').textContent = '0 characters';
-        document.getElementById('lastSaved').textContent = 'Not saved';
-        document.getElementById('deleteBtn').style.display = 'none';
-        this.showEditor(true);
-        document.getElementById('noteTitle').focus();
-    }
-
-    async loadNoteForEditing(noteId) {
-        const note = this.notes.find(n => n.id === noteId);
-        if (!note) return;
-
-        this.currentNoteId = noteId;
-        document.getElementById('noteTitle').value = note.title;
-        document.getElementById('noteContent').value = note.content;
-        document.getElementById('charCount').textContent = `${note.content.length} characters`;
-        document.getElementById('lastSaved').textContent = new Date(note.timestamp).toLocaleString();
-        document.getElementById('deleteBtn').style.display = 'flex';
-        
-        this.showEditor(true);
-        document.getElementById('noteContent').focus();
-    }
-
-    handleSaveNote() {
-        const title = document.getElementById('noteTitle').value.trim();
-        const content = document.getElementById('noteContent').value;
-
-        if (!title && !content) {
-            this.showNotification('Please add a title or content', 'warning');
-            return;
-        }
-
-        this.saveNote(title, content);
-        this.showEditor(false);
-    }
-
-    handleDeleteNote() {
-        if (confirm('Are you sure you want to delete this note?')) {
-            this.deleteNote(this.currentNoteId);
-        }
-    }
-
-    handleManualSync() {
-        if (!this.isOnline) {
-            this.showNotification('You are offline', 'warning');
-            return;
-        }
-        this.autoSync();
-    }
-
-    installApp() {
-        if (this.deferredPrompt) {
-            this.deferredPrompt.prompt();
-            this.deferredPrompt.userChoice.then((choiceResult) => {
-                if (choiceResult.outcome === 'accepted') {
-                    this.showNotification('App installed successfully!', 'success');
-                }
-                this.deferredPrompt = null;
+function updateConnectionStatus() {
+    const isOnline = navigator.onLine;
+    syncStatus.querySelector('.status-text').textContent = isOnline ? 'Online' : 'Offline Mode';
+    const dot = syncStatus.querySelector('.status-dot');
+    dot.className = isOnline ? 'status-dot online' : 'status-dot offline';
+    
+    if (isOnline) {
+        if ('sync' in navigator.serviceWorker) {
+            navigator.serviceWorker.ready.then(reg => {
+                reg.sync.register('sync-pending-notes')
+                    .then(() => console.log('Auto-Sync registered on reconnect.'))
+                    .catch(err => console.warn('Auto-Sync failed (may not be needed):', err));
             });
         }
-    }
-
-    showEditor(show) {
-        const editorForm = document.getElementById('editorForm');
-        const editorContent = document.getElementById('editorContent');
-        
-        if (show) {
-            editorForm.style.display = 'flex';
-            editorContent.style.display = 'none';
-        } else {
-            editorForm.style.display = 'none';
-            editorContent.style.display = 'flex';
-        }
-    }
-
-    // ============== UI Rendering ==============
-    renderNotesList() {
-        const notesList = document.getElementById('notesList');
-        
-        if (this.notes.length === 0) {
-            notesList.innerHTML = '<div class="empty-state">No notes yet. Create one!</div>';
-            return;
-        }
-
-        notesList.innerHTML = this.notes.map(note => `
-            <div class="note-item ${this.currentNoteId === note.id ? 'active' : ''}" 
-                 data-id="${note.id}" 
-                 onclick="app.loadNoteForEditing('${note.id}')">
-                <strong>${this.escapeHtml(note.title)}</strong>
-                <div class="note-item-meta">
-                    ${note.synced ? '✓' : '⏱'} ${new Date(note.timestamp).toLocaleDateString()}
-                </div>
-            </div>
-        `).join('');
-    }
-
-    updateNetworkStatus() {
-        const statusDot = document.querySelector('.status-dot');
-        const statusText = document.querySelector('.status-text');
-        
-        if (this.isOnline) {
-            statusDot.classList.remove('offline');
-            statusDot.classList.add('online');
-            statusText.textContent = 'Online';
-            document.getElementById('syncBtn').disabled = false;
-        } else {
-            statusDot.classList.remove('online');
-            statusDot.classList.add('offline');
-            statusText.textContent = 'Offline';
-            document.getElementById('syncBtn').disabled = true;
-        }
-    }
-
-    updateLastSaved() {
-        document.getElementById('lastSaved').textContent = 'Unsaved changes';
-    }
-
-    updateCachedCount() {
-        document.getElementById('cachedCount').textContent = this.notes.length;
-    }
-
-    async updateStorageInfo() {
-        if (navigator.storage && navigator.storage.estimate) {
-            const estimate = await navigator.storage.estimate();
-            const usage = Math.round(estimate.usage / 1024);
-            const quota = Math.round(estimate.quota / 1024 / 1024);
-            document.getElementById('storageUsage').textContent = `${usage} KB`;
-            document.getElementById('storageMax').textContent = `${quota} MB`;
-        }
-    }
-
-    showNotification(message, type = 'info') {
-        const notification = document.getElementById('notification');
-        notification.textContent = message;
-        notification.className = `notification show ${type}`;
-        
-        setTimeout(() => {
-            notification.classList.remove('show');
-        }, 3000);
-    }
-
-    // ============== Utility Methods ==============
-    generateId() {
-        return `note_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    }
-
-    escapeHtml(text) {
-        const map = {
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#039;'
-        };
-        return text.replace(/[&<>"']/g, m => map[m]);
+        syncPendingNotes(); 
     }
 }
 
-// Initialize app
-const app = new NoteApp();
+async function syncPendingNotes() {
+    if (!navigator.onLine) {
+        showNotification('Cannot sync: Currently offline.', 'warning');
+        return;
+    }
+    
+    if (!db) await openDatabase();
+    const transaction = db.transaction([NOTE_STORE], 'readwrite');
+    const store = transaction.objectStore(NOTE_STORE);
+    const index = store.index('synced_status');
+    
+    // CRITICAL FIX: Query for the number 0 (Unsynced), not the boolean false
+    const request = index.getAll(IDBKeyRange.only(0)); 
+
+    request.onsuccess = (event) => {
+        const unsyncedNotes = event.target.result;
+        if (unsyncedNotes.length === 0) {
+            showNotification('Sync complete. All notes are up-to-date.', 'success');
+            return;
+        }
+
+        showNotification(`Syncing ${unsyncedNotes.length} pending notes...`, 'info');
+        
+        simulateServerSync(unsyncedNotes)
+            .then(syncedNotes => {
+                const updateTx = db.transaction([NOTE_STORE], 'readwrite');
+                const updateStore = updateTx.objectStore(NOTE_STORE);
+                
+                syncedNotes.forEach(note => {
+                    // Update sync status to 1 (Synced)
+                    note.synced = 1; 
+                    updateStore.put(note);
+                });
+                
+                updateTx.oncomplete = () => {
+                    console.log('IndexedDB sync flags updated.');
+                    loadNotes();
+                    showNotification('Synchronization successful!', 'success');
+                };
+            })
+            .catch(error => {
+                console.error('Server sync simulation failed:', error);
+                showNotification('Synchronization failed. Check connection.', 'danger');
+            });
+    };
+    request.onerror = () => showNotification('Error reading local sync data.', 'danger');
+}
+
+function simulateServerSync(notes) {
+    console.log('SIMULATING SERVER API CALL:', notes);
+    return new Promise((resolve, reject) => {
+        setTimeout(() => {
+            if (Math.random() > 0.1) {
+                resolve(notes); 
+            } else {
+                reject(new Error("Simulated API failure")); 
+            }
+        }, 1500);
+    });
+}
+
+// --- Note CRUD Operations (Local First) ---
+
+async function saveNoteToDB(title, content) {
+    if (!db) await openDatabase();
+    
+    const baseNote = {
+        title: title || 'Untitled Note',
+        content: content, 
+        timestamp: new Date().getTime(),
+        // CRITICAL FIX: Use 0 (Unsynced) instead of false
+        synced: 0 
+    };
+
+    let noteToSave;
+
+    if (currentNoteId) {
+        noteToSave = { ...baseNote, id: currentNoteId };
+    } else {
+        noteToSave = baseNote; 
+    }
+    
+    const transaction = db.transaction([NOTE_STORE], 'readwrite');
+    const store = transaction.objectStore(NOTE_STORE);
+    
+    if (currentNoteId) {
+        store.put(noteToSave); 
+    } else {
+        const request = store.add(noteToSave);
+        request.onsuccess = (e) => {
+            currentNoteId = e.target.result;
+            noteToSave.id = currentNoteId; 
+            displayNoteInEditor(noteToSave); 
+        };
+    }
+    
+    transaction.oncomplete = () => {
+        console.log("Note saved locally.");
+        loadNotes(); 
+        lastSavedSpan.textContent = `Last saved: ${new Date().toLocaleTimeString()}`;
+        showNotification('Note saved locally.', 'info');
+        
+        if (navigator.onLine) {
+            syncPendingNotes();
+        }
+    };
+    transaction.onerror = (e) => console.error('Error saving note:', e);
+}
+
+// --- UI Management (Minor adjustment for sync marker logic) ---
+
+async function loadNotes() {
+    if (!db) await openDatabase();
+    
+    const transaction = db.transaction([NOTE_STORE], 'readonly');
+    const store = transaction.objectStore(NOTE_STORE);
+    const request = store.getAll();
+
+    request.onsuccess = (event) => {
+        const notes = event.target.result.reverse();
+        renderNotesList(notes);
+    };
+}
+
+function renderNotesList(notes) {
+    notesList.innerHTML = '';
+    
+    if (notes.length === 0) {
+        notesList.innerHTML = `<div class="empty-state"><p>No notes yet.</p><p>Click '+ New Note' to start writing!</p></div>`;
+        document.getElementById('cachedCount').textContent = '0 notes';
+        return;
+    }
+
+    notes.forEach(note => {
+        const listItem = document.createElement('div');
+        listItem.className = 'note-item';
+        if (note.id === currentNoteId) {
+            listItem.classList.add('active');
+        }
+        
+        // CRITICAL FIX: Check if synced status is 0 (Unsynced)
+        const syncMarker = note.synced === 0 ? '<span style="color:#dc3545; font-size: 0.9em; margin-left: 5px;" title="Unsynced changes">!</span>' : '';
+        
+        listItem.innerHTML = `
+            <div class="note-title">${note.title}${syncMarker}</div>
+            <div class="note-date">${new Date(note.timestamp).toLocaleDateString()}</div>
+        `;
+        listItem.dataset.id = note.id;
+        listItem.addEventListener('click', () => {
+            displayNoteInEditor(note);
+            document.querySelectorAll('.note-item').forEach(item => item.classList.remove('active'));
+            listItem.classList.add('active');
+        });
+        notesList.appendChild(listItem);
+    });
+    document.getElementById('cachedCount').textContent = `${notes.length} notes`;
+}
+
+function displayNoteInEditor(note) {
+    editorContent.style.display = 'none';
+    editorForm.style.display = 'flex';
+    
+    currentNoteId = note.id;
+    noteTitleInput.value = note.title;
+    noteContentInput.value = note.content;
+    
+    noteContentInput.dispatchEvent(new Event('input')); 
+    lastSavedSpan.textContent = `Saved locally: ${new Date(note.timestamp).toLocaleTimeString()}`;
+    deleteBtn.style.display = 'inline-block';
+    
+    document.querySelectorAll('.note-item').forEach(item => item.classList.remove('active'));
+    const activeItem = document.querySelector(`.note-item[data-id="${note.id}"]`);
+    if (activeItem) activeItem.classList.add('active');
+}
+
+function createNewNote() {
+    currentNoteId = null;
+    noteTitleInput.value = '';
+    noteContentInput.value = '';
+    
+    editorContent.style.display = 'none';
+    editorForm.style.display = 'flex';
+    
+    noteContentInput.dispatchEvent(new Event('input')); 
+    lastSavedSpan.textContent = 'Not yet saved';
+    deleteBtn.style.display = 'none'; 
+    noteTitleInput.focus();
+    
+    document.querySelectorAll('.note-item').forEach(item => item.classList.remove('active'));
+}
+
+async function deleteNote() {
+    if (!currentNoteId || !confirm('Are you sure you want to delete this note?')) return;
+    
+    if (!db) await openDatabase();
+    const transaction = db.transaction([NOTE_STORE], 'readwrite');
+    const store = transaction.objectStore(NOTE_STORE);
+    store.delete(currentNoteId);
+    
+    transaction.oncomplete = () => {
+        showNotification('Note deleted locally.', 'danger');
+        createNewNote();
+        loadNotes();
+    };
+}
+
+// --- Interface Enhancements (Non-PWA Core Features) ---
+
+function showNotification(message, type) {
+    const notif = document.getElementById('notification');
+    notif.textContent = message;
+    notif.className = `notification show ${type}`;
+    setTimeout(() => {
+        notif.classList.remove('show');
+    }, 3000);
+}
+
+function updateCharCount() {
+    charCountSpan.textContent = `${noteContentInput.value.length} characters`;
+}
+
+// --- PWA Install Prompt ---
+
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    installBtn.style.display = 'block';
+});
+
+installBtn.addEventListener('click', () => {
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+            if (choiceResult.outcome === 'accepted') {
+                console.log('User accepted the install prompt');
+                installBtn.style.display = 'none';
+            }
+            deferredPrompt = null;
+        });
+    }
+});
+
+// --- Initialization ---
+
+window.addEventListener('load', async () => {
+    await openDatabase();
+    loadNotes();
+    updateConnectionStatus();
+
+    // Event Listeners
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+    
+    newNoteBtn.addEventListener('click', createNewNote);
+    deleteBtn.addEventListener('click', deleteNote);
+    noteContentInput.addEventListener('input', updateCharCount);
+    syncBtn.addEventListener('click', syncPendingNotes);
+
+    // Form Submission Listener
+    editorForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveNoteToDB(noteTitleInput.value, noteContentInput.value);
+    });
+    
+    // Service Worker message handler for sync
+    navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data && event.data.type === 'SYNC_TRIGGERED') {
+            syncPendingNotes();
+        }
+    });
+    
+    createNewNote(); 
+});

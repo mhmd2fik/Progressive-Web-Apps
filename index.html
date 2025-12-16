@@ -4,82 +4,94 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Offline-first PWA Note Taking App with Advanced Caching">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#259d84"> 
     <title>NotePad - Offline-First PWA</title>
     <link rel="manifest" href="manifest.json">
-    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%236366f1' width='192' height='192'/><text x='50%' y='50%' font-size='120' fill='white' text-anchor='middle' dy='.3em'>📝</text></svg>">
+    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%23259d84' width='192' height='192'/><text x='50%' y='50%' font-size='120' fill='white' text-anchor='middle' dy='.3em'>📝</text></svg>">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="app-container">
-        <header class="app-header">
-            <div class="header-content">
-                <h1>📝 NotePad</h1>
-                <p class="tagline">Offline-First PWA Note Taking</p>
+        
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <h1 class="app-title">📝 NotePad</h1>
+                <input type="text" id="noteSearch" class="search-input" placeholder="Search notes...">
+                <button id="newNoteBtn" class="btn btn-new-note">+ New Note</button>
+            </header>
+            
+            <div id="notesList" class="notes-list">
+                <div class="empty-state">
+                    <p>No notes yet.</p>
+                    <p>Click '+ New Note' to start writing!</p>
+                </div>
             </div>
-            <div class="header-actions">
-                <div class="status-indicator" id="syncStatus">
+            
+            <footer class="sidebar-footer">
+                <div class="footer-item status-indicator" id="syncStatus">
                     <span class="status-dot offline"></span>
                     <span class="status-text">Offline</span>
                 </div>
-                <button id="installBtn" class="btn btn-install" style="display: none;">
-                    ⬇️ Install App
-                </button>
-                <button id="syncBtn" class="btn btn-sync" title="Sync with server">
-                    🔄 Sync
-                </button>
+                <div class="footer-item action-buttons">
+                    <button id="syncBtn" class="btn btn-icon" title="Sync with server">🔄</button>
+                    <button id="installBtn" class="btn btn-icon" title="Install App" style="display: none;">⬇️</button>
+                </div>
+            </footer>
+        </aside>
+
+        <main class="editor-panel">
+            <div id="editorContent" class="editor-content">
+                <div class="empty-editor">
+                    <h2>Welcome to NotePad PWA</h2>
+                    <p>Select a note from the sidebar or start a new one.</p>
+                    <p class="tagline">Always available, even when offline.</p>
+                </div>
             </div>
-        </header>
 
-        <main class="app-main">
-            <aside class="sidebar">
-                <div class="sidebar-header">
-                    <h2>Notes</h2>
-                    <button id="newNoteBtn" class="btn btn-primary">+ New</button>
-                </div>
-                <div id="notesList" class="notes-list">
-                    <div class="empty-state">No notes yet. Create one!</div>
-                </div>
-            </aside>
-
-            <section class="editor">
-                <div id="editorContent" class="editor-content">
-                    <div class="empty-editor">
-                        <h2>Create your first note</h2>
-                        <p>Click "New" to start writing</p>
+            <form id="editorForm" class="editor-form" style="display: none;"> 
+                <header class="editor-toolbar">
+                    <input type="text" id="noteTitle" placeholder="Note Title" class="editor-title">
+                    <div class="toolbar-actions">
+                        <button type="button" id="deleteBtn" class="btn btn-danger" title="Delete Note">🗑️ Delete</button>
+                        <button type="submit" id="saveBtn" class="btn btn-success" title="Save Note">💾 Save</button> 
                     </div>
-                </div>
-                <div id="editorForm" class="editor-form" style="display: none;">
-                    <div class="editor-toolbar">
-                        <input type="text" id="noteTitle" placeholder="Note Title" class="editor-title">
-                        <div class="toolbar-actions">
-                            <button id="saveBtn" class="btn btn-success">💾 Save</button>
-                            <button id="deleteBtn" class="btn btn-danger">🗑️ Delete</button>
-                            <button id="cancelBtn" class="btn btn-secondary">✕ Cancel</button>
-                        </div>
-                    </div>
-                    <textarea id="noteContent" placeholder="Write your note here..."></textarea>
-                    <div class="editor-footer">
-                        <span id="charCount" class="char-count">0 characters</span>
-                        <span id="lastSaved" class="last-saved">Not saved</span>
-                    </div>
-                </div>
-            </section>
+                </header>
+                
+                <textarea id="noteContent" placeholder="Write your note here..."></textarea>
+                
+                <footer class="editor-footer">
+                    <span id="charCount" class="char-count">0 characters</span>
+                    <span id="lastSaved" class="last-saved">Not saved</span>
+                </footer>
+            </form>
         </main>
-
-        <footer class="app-footer">
-            <div class="footer-content">
-                <p>🌐 Service Worker: <span id="swStatus">Not registered</span></p>
-                <p>💾 Cached Notes: <span id="cachedCount">0</span></p>
-                <p>📊 Storage: <span id="storageUsage">0 KB</span> / <span id="storageMax">50 MB</span></p>
-            </div>
-        </footer>
     </div>
 
-    <!-- Notification Toast -->
+    <footer class="app-stats-footer">
+        <p>🌐 SW: <span id="swStatus">Not registered</span></p>
+        <p>💾 Cached: <span id="cachedCount">0 notes</span></p>
+        <p>📊 Storage: <span id="storageUsage">0 KB</span> / <span id="storageMax">50 MB</span></p>
+    </footer>
+
     <div id="notification" class="notification"></div>
 
-    <script src="service-worker-register.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => {
+                        console.log('Service Worker registered! Scope:', reg.scope);
+                        document.getElementById('swStatus').textContent = 'Active';
+                    })
+                    .catch(err => {
+                        console.error('Service Worker registration failed:', err);
+                        document.getElementById('swStatus').textContent = 'Failed';
+                    });
+            });
+        } else {
+            document.getElementById('swStatus').textContent = 'Not supported';
+        }
+    </script>
     <script src="app.js"></script>
 </body>
 </html>
