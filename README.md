@@ -5,7 +5,8 @@ Abdelrahman amer/20226056
 Alhassan tamem/20226132
 
 
-NotePad PWA: Offline-First Note Taking App##✨ Project DescriptionThe **NotePad PWA** is a modern, responsive, and highly reliable note-taking application designed to showcase the power of Progressive Web App (PWA) technologies. Built with vanilla HTML, CSS, and JavaScript, this project features a **Cache-First** strategy using Service Workers to guarantee availability and functionality, even under unreliable or nonexistent network conditions.
+NotePad PWA: Offline-First Note Taking App
+Project DescriptionThe **NotePad PWA** is a modern, responsive, and highly reliable note-taking application designed to showcase the power of Progressive Web App (PWA) technologies. Built with vanilla HTML, CSS, and JavaScript, this project features a **Cache-First** strategy using Service Workers to guarantee availability and functionality, even under unreliable or nonexistent network conditions.
 
 The application uses a clean, two-panel interface with a vibrant green (`#259d84`) and white theme for a user-friendly and modern experience.
 
